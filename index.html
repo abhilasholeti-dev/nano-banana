@@ -87,100 +87,111 @@
     </div>
 </div>
 
-<script>
-    let posts = JSON.parse(localStorage.getItem('cms_posts')) || [];
-    let currentImgData = ""; // Stores the base64 string
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
-    // 1. Handle Paste Events
-    window.addEventListener('paste', e => {
-        if (document.getElementById('editor').style.display === 'block') {
-            const items = e.clipboardData.items;
-            for (let i = 0; i < items.length; i++) {
-                if (items[i].type.indexOf("image") !== -1) {
-                    const blob = items[i].getAsFile();
-                    handleFile(blob);
-                }
+<section id="editor" class="editor-panel" style="display:none;">
+    <h3>Create New Post</h3>
+    <div class="form-group">
+        <label>Upload or Paste Image:</label>
+        <input type="file" id="fileInput" accept="image/*">
+        <p style="font-size: 0.8em; color: #666;">(You can also click here and press Ctrl+V to paste an image)</p>
+    </div>
+    <div class="form-group">
+        <input type="text" id="postTitle" placeholder="Entry Title">
+    </div>
+    <div class="form-group">
+        <textarea id="postDesc" rows="4" placeholder="Enter full PROMPT here..."></textarea>
+    </div>
+    <button class="btn-add" id="publishBtn" onclick="savePost()">Publish Post</button>
+</section>
+
+<script>
+    // 1. Initialize Supabase (Replace with YOUR actual keys)
+    const SUPABASE_URL = 'https://your-project-id.supabase.co';
+    const SUPABASE_KEY = 'your-anon-key';
+    const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    // 2. Handle Paste Events for Images
+    document.addEventListener('paste', (e) => {
+        const items = e.clipboardData.items;
+        for (let i = 0; i < items.length; i++) {
+            if (items[i].type.indexOf('image') !== -1) {
+                const blob = items[i].getAsFile();
+                document.getElementById('fileInput').files = createFileList(blob);
             }
         }
     });
 
-    // 2. Process File to Base64
-    function handleFile(file) {
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            currentImgData = e.target.result;
-            const preview = document.getElementById('previewThumb');
-            preview.src = currentImgData;
-            preview.style.display = 'inline-block';
-            document.getElementById('uploadText').style.display = 'none';
-        };
-        reader.readAsDataURL(file);
+    // Helper to programmatically set file input
+    function createFileList(file) {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        return dt.files;
     }
 
-    function toggleEditor() {
-        const editor = document.getElementById('editor');
-        editor.style.display = editor.style.display === 'none' ? 'block' : 'none';
-    }
-
-    function savePost() {
+    async function savePost() {
+        const btn = document.getElementById('publishBtn');
+        const file = document.getElementById('fileInput').files[0];
         const title = document.getElementById('postTitle').value;
         const desc = document.getElementById('postDesc').value;
 
-        if(!currentImgData || !title || !desc) return alert("Please include an image, title, and prompt!");
+        if (!file || !title || !desc) return alert("Fill all fields and add an image!");
 
-        const newPost = { id: Date.now(), url: currentImgData, title, desc };
-        
+        btn.disabled = true;
+        btn.innerText = "Uploading...";
+
         try {
-            posts.push(newPost);
-            localStorage.setItem('cms_posts', JSON.stringify(posts));
-            renderPosts();
-            resetForm();
-            toggleEditor();
-        } catch (e) {
-            alert("Storage limit reached! Try a smaller image.");
+            // A. Upload Image to Supabase Storage
+            const fileName = `${Date.now()}-${file.name}`;
+            const { data: uploadData, error: uploadError } = await supabase.storage
+                .from('prompts')
+                .upload(fileName, file);
+
+            if (uploadError) throw uploadError;
+
+            // B. Get Public URL
+            const { data: urlData } = supabase.storage.from('prompts').getPublicUrl(fileName);
+            const publicUrl = urlData.publicUrl;
+
+            // C. Save to Database
+            const { error: dbError } = await supabase
+                .from('posts')
+                .insert([{ title, desc, url: publicUrl }]);
+
+            if (dbError) throw dbError;
+
+            location.reload(); // Refresh to show new post
+        } catch (err) {
+            alert(err.message);
+            btn.disabled = false;
+            btn.innerText = "Publish Post";
         }
     }
 
-    function resetForm() {
-        currentImgData = "";
-        document.getElementById('postTitle').value = '';
-        document.getElementById('postDesc').value = '';
-        document.getElementById('previewThumb').style.display = 'none';
-        document.getElementById('uploadText').style.display = 'block';
-    }
+    async function renderPosts() {
+        const { data, error } = await supabase
+            .from('posts')
+            .select('*')
+            .order('id', { ascending: false });
 
-    function renderPosts() {
+        if (error) return console.error(error);
+
         const feed = document.getElementById('mainFeed');
-        feed.innerHTML = posts.map(post => `
-            <div class="card" onclick="openViewer(${post.id})">
+        feed.innerHTML = data.map(post => `
+            <div class="card" onclick='openViewer(${JSON.stringify(post)})'>
                 <img src="${post.url}" alt="${post.title}">
                 <div class="card-title">${post.title}</div>
             </div>
         `).join('');
     }
 
-    function openViewer(id) {
-        const post = posts.find(p => p.id === id);
+    function openViewer(post) {
         document.getElementById('viewTitle').innerText = post.title;
         document.getElementById('viewDesc').innerText = post.desc;
         document.getElementById('viewer').style.display = 'flex';
     }
 
-    function closeViewer() {
-        document.getElementById('viewer').style.display = 'none';
-    }
-
-    async function copyText() {
-        const text = document.getElementById('viewDesc').innerText;
-        try {
-            await navigator.clipboard.writeText(text);
-            alert("Prompt copied!");
-        } catch (err) {
-            alert("Failed to copy.");
-        }
-    }
-
+    // Load posts on start
     renderPosts();
 </script>
 
